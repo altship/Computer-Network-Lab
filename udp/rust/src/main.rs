@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, UdpSocket, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, UdpSocket, SocketAddr};
 use std::str;
 use clap::Parser;
 use std::{thread, time};
@@ -11,7 +11,7 @@ fn main() {
     // Assign destination ip and port address.
     let addr = 
         if cli.actions.receive {SocketAddr::from((Ipv4Addr::UNSPECIFIED, cli.port))} 
-        else {SocketAddr::new(cli.address.parse().unwrap(), cli.port)};
+        else {SocketAddr::new(IpAddr::V4(cli.address.parse().unwrap()), cli.port)};
 
     // The tcp method is not been implemented yet.
     if cli.methods.udp {
