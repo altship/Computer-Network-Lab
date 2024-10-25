@@ -1,4 +1,4 @@
-use std::str;
+use core::str;
 use std::io::{prelude::*, stdin};
 use std::fs;
 use std::process::Command;
@@ -32,7 +32,9 @@ fn server(addr: &SocketAddr) -> Result<(), std::io::Error> {
     let mut command_buff = [0; 16];
     let mut file_name_buff = [0; 32];
     let mut file_buff = [0; 2048];
-    let locat = String::from("/home/altship/remote/");
+    
+    // Change this variable to change the folder visited by server.
+    let locat = String::from("/tmp/remote/");
 
     loop {
         let mut byte_read = stream.read(&mut command_buff).expect("Failed in receiving command!");
@@ -63,19 +65,25 @@ fn server(addr: &SocketAddr) -> Result<(), std::io::Error> {
 
             "download" => {
                 byte_read = stream.read(&mut file_name_buff).expect("Failed in receiving file name!");
-                let file_read = fs::read(format!("{}{}", locat, str::from_utf8(&file_name_buff[..byte_read]).unwrap()));
+                let file_read = 
+                    fs::read(format!("{}{}", locat, str::from_utf8(&file_name_buff[..byte_read]).unwrap()));
 
                 let file_read = match file_read {
                     Ok(fi) => fi,
-                    Err(_) => String::from("You typed a wrong file name or you have no right to read it!").into_bytes(),
+                    Err(_) => String::from("!!Err!!").into_bytes(),
                 };
+
                 stream.write(&file_read).expect("Failed to write to send buffer!");
                 stream.flush().expect("Failed to flush send buffer!");
             },
 
             _ => {
-                stream.write("You have entered a wrong command!".as_bytes()).expect("Failed to write to send buffer!");
-                stream.flush().expect("Failed to flush send buffer!");
+                // As designated, client should not send unrecognizable command.
+                // If it does occur, something wrong must happen during transferring command.
+                // Error recover measurement haven't been implemented, shut this connection avoid further error.
+                stream.shutdown(std::net::Shutdown::Both).expect("Shutdown connection failed!");
+                println!("Connection closed due to previous error.");
+                return Ok(());
             },
         }
     }
@@ -87,7 +95,7 @@ fn client(addr: &SocketAddr) -> Result<(), std::io::Error> {
 
     let mut input_buff = String::new();
     let mut buff = [0; 2048];
-    let locat = String::from("/home/altship/recv/");
+    let locat = String::from("/tmp/local/");
 
     loop {
         println!("Please enter a command:");
@@ -98,7 +106,13 @@ fn client(addr: &SocketAddr) -> Result<(), std::io::Error> {
             "ls" => {
                 stream.write("ls".as_bytes()).expect("Failed to write to send buffer!");
                 stream.flush().expect("Failed to flush send buffer!");
+
                 let byte_read = stream.read(&mut buff).expect("Failed in receiving \"ls\" result!");
+                if let 0 = byte_read {
+                    println!("Connection closed by server.");
+                    return Ok(());
+                }
+
                 print!("{}", str::from_utf8(&buff[..byte_read]).unwrap());
             },
 
@@ -119,6 +133,7 @@ fn client(addr: &SocketAddr) -> Result<(), std::io::Error> {
 
                 stream.write(&file_read).expect("Failed on writing to send buffer!");
                 stream.flush().expect("Failed to flush send buffer!");
+                println!("File have been sent to server.");
             },
 
             "download" => {
@@ -133,8 +148,21 @@ fn client(addr: &SocketAddr) -> Result<(), std::io::Error> {
                 stream.flush().expect("Failed on flushing send buffer!");
 
                 let byte_read = stream.read(&mut buff).expect("Failed on receiving file!");
-                fs::write(format!("{}{}", locat, &input_buff), &buff[..byte_read])
-                   .expect("Failed on writing file!");
+                if let 0 = byte_read {
+                    println!("Connection closed by server.");
+                    return Ok(());
+                }
+                
+                match str::from_utf8(&buff[..byte_read]).unwrap() {
+                    "!!Err!!" => {
+                        println!("You have specified a wrong file name or you have no right to read it.");
+                    },
+                    _ => {
+                        fs::write(format!("{}{}", locat, &input_buff), &buff[..byte_read])
+                            .expect("Failed on writing file!");
+                        println!("File successfully downloaded.");
+                    },
+                };
             },
 
             "shutdown" => {
@@ -145,6 +173,6 @@ fn client(addr: &SocketAddr) -> Result<(), std::io::Error> {
             _ => {
                 println!("You have entered a unsupported command!");
             },
-        }
+        };
     }
 }
