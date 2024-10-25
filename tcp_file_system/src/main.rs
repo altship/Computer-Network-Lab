@@ -3,6 +3,8 @@ use std::io::{prelude::*, stdin};
 use std::fs;
 use std::process::Command;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::thread;
+use std::sync::{Arc, Mutex};
 use clap::Parser;
 
 mod argument_parser;
@@ -12,23 +14,36 @@ fn main() -> std::io::Result<()> {
 
     let addr = 
         if cli.actions.server {SocketAddr::from((Ipv4Addr::UNSPECIFIED, cli.port))}
-        else {SocketAddr::from((IpAddr::V4(cli.address.parse().expect("Entered a wrong IPv4 address.")), cli.port))};
+        else {
+            SocketAddr::from(
+                (IpAddr::V4(cli.address.parse().expect("Entered a wrong IPv4 address.")), cli.port)
+            )
+        };
     
-
     if cli.actions.server {
-        server(&addr).expect("Failed to start server.");
+        let listener = TcpListener::bind(&addr).expect("Failed to bind to address.");
+        let file_lock = Arc::new(Mutex::new(0));
+
+        loop {
+            let (stream, source_addr) = 
+                listener.accept().expect("Accepting remote connection failed!");
+            println!("Estabilished connection with {source_addr}.");
+            let file_lock = Arc::clone(&file_lock);
+            thread::spawn(move || {
+                server(stream, file_lock).expect("Failed to start server.");
+            });
+        };
+
     } else {
         client(&addr).expect("Failed to start a client");
     }
     Ok(())
 }
 
-fn server(addr: &SocketAddr) -> Result<(), std::io::Error> {
-    let listener = TcpListener::bind(addr).unwrap();
-    let (mut stream, source_addr) = 
-        listener.accept().expect("Accepting remote connection failed!");
-    println!("Estabilished connection with {source_addr}.");
-
+/*
+    file read and write are protected by a mutex lock in server.
+ */
+fn server(mut stream: TcpStream, file_lock: Arc<Mutex<i32>>) -> Result<(), std::io::Error> {
     let mut command_buff = [0; 16];
     let mut file_name_buff = [0; 32];
     let mut file_buff = [0; 2048];
@@ -59,14 +74,18 @@ fn server(addr: &SocketAddr) -> Result<(), std::io::Error> {
                 byte_read = stream.read(&mut file_name_buff).expect("Failed in receiving file name!");
                 let content_length = stream.read(&mut file_buff).expect("Failed in receiving file!");
 
+                let _lock = file_lock.lock().unwrap();
                 fs::write(format!("{}{}", locat, str::from_utf8(&file_name_buff[..byte_read]).unwrap()), 
                     &file_buff[..content_length]).expect("Writing file error!");
             },
 
             "download" => {
                 byte_read = stream.read(&mut file_name_buff).expect("Failed in receiving file name!");
-                let file_read = 
-                    fs::read(format!("{}{}", locat, str::from_utf8(&file_name_buff[..byte_read]).unwrap()));
+                
+                let file_read = {
+                    let _lock = file_lock.lock().unwrap();
+                    fs::read(format!("{}{}", locat, str::from_utf8(&file_name_buff[..byte_read]).unwrap()))
+                };
 
                 let file_read = match file_read {
                     Ok(fi) => fi,
@@ -89,12 +108,20 @@ fn server(addr: &SocketAddr) -> Result<(), std::io::Error> {
     }
 }
 
+/*
+    Client side is a simple command line interface.
+    It supports "ls", "upload", "download", "shutdown" commands.
+    file read/write in local folder is not lock in the client side, use it at your own risk.
+ */
 fn client(addr: &SocketAddr) -> Result<(), std::io::Error> {
     let mut stream = TcpStream::connect(addr).expect("Failed to connect to server!");
     println!("Established connection with server!");
 
     let mut input_buff = String::new();
     let mut buff = [0; 2048];
+
+    // Change this variable to change the folder visited by client.
+    // You cannot list the folder inside the client.
     let locat = String::from("/tmp/local/");
 
     loop {
@@ -127,9 +154,14 @@ fn client(addr: &SocketAddr) -> Result<(), std::io::Error> {
                 stream.write(&input_buff.as_bytes()).expect("Failed to write to send buffer!");
                 stream.flush().expect("Failed on flushing send buffer!");
 
-                let file_read = 
-                    fs::read(format!("{}{}", locat, &input_buff))
-                        .expect("Failed to read file!");
+                let file_read = fs::read(format!("{}{}", locat, &input_buff));
+                let file_read = match file_read {
+                    Ok(fi) => fi,
+                    Err(_) => {
+                        println!("File not found or you have no right to read it.");
+                        continue;
+                    },
+                };
 
                 stream.write(&file_read).expect("Failed on writing to send buffer!");
                 stream.flush().expect("Failed to flush send buffer!");
