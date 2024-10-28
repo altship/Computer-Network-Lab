@@ -30,7 +30,7 @@ fn main() -> std::io::Result<()> {
             println!("Estabilished connection with {source_addr}.");
             let file_lock = Arc::clone(&file_lock);
             thread::spawn(move || {
-                server(stream, file_lock).expect("Failed to start server.");
+                server(stream, file_lock, &source_addr).expect("Failed to start server.");
             });
         };
 
@@ -43,7 +43,7 @@ fn main() -> std::io::Result<()> {
 /*
     file read and write are protected by a mutex lock in server.
  */
-fn server(mut stream: TcpStream, file_lock: Arc<Mutex<i32>>) -> Result<(), std::io::Error> {
+fn server(mut stream: TcpStream, file_lock: Arc<Mutex<i32>>, addr: &SocketAddr) -> Result<(), std::io::Error> {
     let mut command_buff = [0; 16];
     let mut file_name_buff = [0; 32];
     let mut file_buff = [0; 2048];
@@ -55,12 +55,14 @@ fn server(mut stream: TcpStream, file_lock: Arc<Mutex<i32>>) -> Result<(), std::
         let mut byte_read = stream.read(&mut command_buff).expect("Failed in receiving command!");
         if let 0 = byte_read {
             stream.shutdown(std::net::Shutdown::Both).expect("Shutdown connection failed!");
-            println!("Connection closed.");
+            println!("Connection closed on {}", &addr);
             return Ok(());
         }
 
         match str::from_utf8(&command_buff[..byte_read]).unwrap() {
             "ls" => {
+                println!("\"ls\" command received on {}.", &addr);
+
                 let response = Command::new("ls")
                                             .arg("-al")
                                             .arg(&locat)
@@ -71,6 +73,8 @@ fn server(mut stream: TcpStream, file_lock: Arc<Mutex<i32>>) -> Result<(), std::
             },
 
             "upload" => {
+                println!("\"upload\" command received on {}.", &addr);
+
                 byte_read = stream.read(&mut file_name_buff).expect("Failed in receiving file name!");
                 let content_length = stream.read(&mut file_buff).expect("Failed in receiving file!");
 
@@ -80,6 +84,8 @@ fn server(mut stream: TcpStream, file_lock: Arc<Mutex<i32>>) -> Result<(), std::
             },
 
             "download" => {
+                println!("\"download\" command received on {}.", &addr);
+
                 byte_read = stream.read(&mut file_name_buff).expect("Failed in receiving file name!");
                 
                 let file_read = {
@@ -125,7 +131,9 @@ fn client(addr: &SocketAddr) -> Result<(), std::io::Error> {
     let locat = String::from("/tmp/local/");
 
     loop {
-        println!("Please enter a command:");
+        print!("\nPlease enter a command:\n>");
+        std::io::stdout().flush().expect("Failed to flush stdout!");
+
         input_buff.clear();
         stdin().read_line(&mut input_buff).expect("Reading line error!");
 
